@@ -216,6 +216,19 @@ def main():
     wid = pygame.display.get_wm_info()['window']
     print("Tello video WID:", wid)
 
+    status_print('TelloPy Help')
+    help_screen = pygame.image.load("tellopy/examples/help.png")
+    pygame.display.get_surface().blit(help_screen, (0,0))
+    pygame.display.flip()
+    while True:
+        e = pygame.event.wait()
+        if e.type == pygame.locals.KEYUP:
+            break
+
+    status_print('TelloPy')
+    pygame.display.get_surface().fill((0,0,0))
+    pygame.display.flip()
+
     drone = tellopy.Tello()
     drone.connect()
     drone.start_video()
