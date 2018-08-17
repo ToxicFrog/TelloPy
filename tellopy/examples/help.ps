@@ -1,0 +1,109 @@
+% generate with
+% gs -sOutputFile=help.png -sDEVICE=pngalpha -g1280x720 help.ps
+
+<< /PageSize [1280 720] >> setpagedevice
+
+% x y min
+% x y max
+/min { 2 copy lt { pop } { exch pop } ifelse } def
+/max { 2 copy lt { exch pop } { pop } ifelse } def
+
+% w h x y box
+/box {
+  moveto
+  exch  % h w
+  dup 0 rlineto
+  exch  % w h
+  0 exch rlineto % w
+  -1 mul 0 rlineto
+  closepath
+} def
+
+% helptext keycap x y key
+/key {
+  gsave
+  translate
+  dup stringwidth pop % get width of string on stack
+  10 add 30 max
+  % Draw the outer and inner boxes
+  dup 30 10 10 box
+  dup 10 add 40 5 5 box
+  % draw the bevels
+  % FIXME take the width into account here!
+  5 5 moveto 5 5 rlineto
+  5 45 moveto 5 -5 rlineto
+  dup 15 add 5 moveto -5 5 rlineto
+  dup 15 add 45 moveto -5 -5 rlineto
+  % add the keycap
+  15 16 moveto exch show
+  % add the caption
+  25 add 15 moveto show
+  stroke
+  grestore
+} def
+
+/DeviceRGB setcolorspace
+0 0 0 setcolor
+  clippath
+  fill
+
+1 1 1 setcolor
+
+/FixedSys findfont
+32 scalefont setfont
+
+gsave
+  100 600 translate
+  () (Q) 20 0 key
+  (Yaw Left/Right) (E) 80 0 key
+  grestore
+
+gsave
+  100 500 translate
+  () (W) 50 50 key
+  () (A) 0 0 key
+  () (S) 50 0 key
+  (Move Slow) (D) 100 0 key
+  grestore
+
+gsave
+  100 350 translate
+  (Ascend) (space) 0 50 key
+  (Descend) (shift) 0 0 key
+  grestore
+
+gsave
+  600 500 translate
+  () (^) 50 50 key
+  () (<) 0 0 key
+  () (v) 50 0 key
+  (Move/Turn Fast) (>) 100 0 key
+  grestore
+
+gsave
+  100 150 translate
+  (Takeoff) ( tab ) 0 100 key
+  (Land) (bkspc) 0 50 key
+  (Palm Land) (P) 0 0 key
+  grestore
+
+gsave
+  600 150 translate
+  % (Speed Control) (???) 0 200 key
+  % (Exposure Control) (???) 0 150 key
+  (Toggle Zoom) (Z) 0 100 key
+  (Take Photo) (enter) 0 50 key
+  (Record Video) (R) 0 0 key
+  grestore
+
+gsave
+  100 50 translate
+  (Show this screen) (H) 0 0 key
+  grestore
+
+showpage
+quit
+
+    % 'backspace': lambda drone, speed: drone.land(),
+    % 'enter': take_picture,
+    % 'return': take_picture,
