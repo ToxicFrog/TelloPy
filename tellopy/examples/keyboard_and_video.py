@@ -87,6 +87,19 @@ def toggle_zoom(drone, speed):
     pygame.display.get_surface().fill((0,0,0))
     pygame.display.flip()
 
+help_mode = False
+help_screen = None
+def toggle_help(drone, speed):
+    global help_mode, help_screen
+    if speed == 0:
+        pygame.display.get_surface().fill((0,0,0))
+        pygame.display.flip()
+        help_mode = False
+    else:
+        pygame.display.get_surface().blit(help_screen, (0,0))
+        pygame.display.flip()
+        help_mode = True
+
 controls = {
     'w': 'forward',
     's': 'backward',
@@ -109,6 +122,7 @@ controls = {
     'z': toggle_zoom,
     'enter': take_picture,
     'return': take_picture,
+    'h': toggle_help,
 }
 
 class FlightDataDisplay(object):
@@ -142,6 +156,9 @@ def flight_data_recording(*args):
     return (video_recorder and "REC 00:00" or "")  # TODO: duration of recording
 
 def update_hud(hud, drone, flight_data):
+    global help_mode
+    if help_mode:
+        return
     (w,h) = (158,0) # width available on side of screen in 4:3 mode
     blits = []
     for element in hud:
@@ -187,9 +204,12 @@ def videoFrameHandler(event, sender, data):
             '-'],
             stdin=PIPE)
     try:
-        video_player.stdin.write(data)
         if video_recorder:
             video_recorder.stdin.write(data)
+        global help_mode
+        if help_mode:
+            return
+        video_player.stdin.write(data)
     except IOError as err:
         status_print(str(err))
         video_player = None
@@ -217,6 +237,7 @@ def main():
     print("Tello video WID:", wid)
 
     status_print('TelloPy Help')
+    global help_screen
     help_screen = pygame.image.load("tellopy/examples/help.png")
     pygame.display.get_surface().blit(help_screen, (0,0))
     pygame.display.flip()
