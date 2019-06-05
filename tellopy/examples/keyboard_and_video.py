@@ -28,6 +28,9 @@ import pygame.locals
 import pygame.font
 import os
 import datetime
+import av
+import threading
+import numpy as np
 from subprocess import Popen, PIPE
 # from tellopy import logger
 
@@ -37,7 +40,6 @@ prev_flight_data = None
 video_player = None
 video_recorder = None
 font = None
-wid = None
 date_fmt = '%Y-%m-%d_%H%M%S'
 
 def toggle_recording(drone, speed):
@@ -99,7 +101,7 @@ def toggle_help(drone, speed):
         pygame.display.flip()
         help_mode = False
     else:
-        pygame.display.get_surface().blit(help_screen, (0,0))
+        blitScaled(pygame.display.get_surface(), help_screen)
         pygame.display.flip()
         help_mode = True
 
@@ -173,11 +175,11 @@ def update_hud(hud, drone, flight_data):
         h += surface.get_height()
     h += 64  # add some padding
     overlay = pygame.Surface((w, h), pygame.SRCALPHA)
-    overlay.fill((0,0,0)) # remove for mplayer overlay mode
+    # overlay.fill((0,0,0)) # remove for mplayer overlay mode
     for blit in blits:
         overlay.blit(*blit)
     pygame.display.get_surface().blit(overlay, (0,0))
-    pygame.display.update(overlay.get_rect())
+    # pygame.display.update(overlay.get_rect())
 
 def status_print(text):
     pygame.display.set_caption(text)
@@ -198,31 +200,36 @@ def flightDataHandler(event, sender, data):
         update_hud(hud, sender, data)
         prev_flight_data = text
 
-def videoFrameHandler(event, sender, data):
-    global video_player
-    global video_recorder
-    if video_player is None:
-        cmd = [ 'mplayer', '-fps', '35', '-really-quiet' ]
-        if wid is not None:
-            cmd = cmd + [ '-wid', str(wid) ]
-        video_player = Popen(cmd + ['-'], stdin=PIPE)
+def aspectScale(surface, dimensions):
+    dw,dh = dimensions  # destination dims
+    ow,oh = surface.get_size()  # original dims
+    sx,sy = (dw/ow, dh/oh)  # scale factors
+    return pygame.transform.smoothscale(surface, (int(ow*min(sx,sy)), int(oh*min(sx,sy))))
 
+def blitScaled(dst, src):
+    """Scale src to the size of dst, preserving aspect ratio, and blit it centered to dst."""
+    dst_size = dst.get_size()
+    src = aspectScale(src, dst_size)
+    src_size = src.get_size()
+    x = int((dst_size[0]-src_size[0])/2)
+    y = int((dst_size[1]-src_size[1])/2)
+    dst.blit(src, (x,y))
+
+def sleepUntil(when):
+    time.sleep(max(0, when - time.monotonic()))
+
+def videoStreamThread(drone, screen):
     global help_mode
-    if help_mode:
-        return
-
-    try:
-        video_player.stdin.write(data)
-    except IOError as err:
-        status_print(str(err))
-        video_player = None
-
-    try:
-        if video_recorder:
-            video_recorder.stdin.write(data)
-    except IOError as err:
-        status_print(str(err))
-        video_recorder = None
+    container = av.open(drone.get_video_stream())
+    resolution = screen.get_size()
+    start_time = time.monotonic()
+    last_frame_time = 0
+    for frame in container.decode():
+        sleepUntil(start_time + last_frame_time)
+        surface = pygame.surfarray.make_surface(np.swapaxes(frame.to_rgb().to_ndarray(), 0, 1))
+        blitScaled(screen, surface)
+        # TODO: update OSD here
+        last_frame_time = frame.time or 0
 
 def handleFileReceived(event, sender, data):
     global date_fmt
@@ -237,21 +244,17 @@ def handleFileReceived(event, sender, data):
 def main():
     pygame.init()
     pygame.display.init()
-    pygame.display.set_mode((1280, 720))
+    pygame.display.set_mode((800,600))
+    # pygame.display.set_mode((0,0), pygame.FULLSCREEN)
     pygame.font.init()
 
     global font
     font = pygame.font.SysFont("dejavusansmono", 32)
 
-    global wid
-    if 'window' in pygame.display.get_wm_info():
-        wid = pygame.display.get_wm_info()['window']
-    print("Tello video WID:", wid)
-
     status_print('TelloPy Help')
     global help_screen
     help_screen = pygame.image.load("tellopy/examples/help.png")
-    pygame.display.get_surface().blit(help_screen, (0,0))
+    blitScaled(pygame.display.get_surface(), help_screen)
     pygame.display.flip()
     while True:
         e = pygame.event.wait()
@@ -262,22 +265,27 @@ def main():
     pygame.display.get_surface().fill((0,0,0))
     pygame.display.flip()
 
+    speed = 30
     drone = tellopy.Tello()
     drone.connect()
     drone.start_video()
     drone.subscribe(drone.EVENT_FLIGHT_DATA, flightDataHandler)
-    drone.subscribe(drone.EVENT_VIDEO_FRAME, videoFrameHandler)
     drone.subscribe(drone.EVENT_FILE_RECEIVED, handleFileReceived)
-    speed = 30
+
+    framebuffer = pygame.display.get_surface().copy()
+    threading.Thread(target=videoStreamThread, args=[drone, framebuffer]).start()
 
     try:
         while 1:
+            if not help_mode:
+                pygame.display.get_surface().blit(framebuffer, (0,0))
+                pygame.display.flip()
             time.sleep(0.01)  # loop with pygame.event.get() is too mush tight w/o some sleep
             for e in pygame.event.get():
                 # WASD for movement
                 if e.type == pygame.locals.KEYDOWN:
-                    print('+' + pygame.key.name(e.key))
                     keyname = pygame.key.name(e.key)
+                    print('+' + keyname)
                     if keyname == 'escape':
                         drone.quit()
                         os._exit(0)
@@ -289,16 +297,17 @@ def main():
                             key_handler(drone, speed)
 
                 elif e.type == pygame.locals.KEYUP:
-                    print('-' + pygame.key.name(e.key))
                     keyname = pygame.key.name(e.key)
+                    print('-' + keyname)
                     if keyname in controls:
                         key_handler = controls[keyname]
                         if type(key_handler) == str:
                             getattr(drone, key_handler)(0)
                         else:
                             key_handler(drone, 0)
-    except e:
-        print(str(e))
+    except Exception as e:
+        import traceback
+        traceback.print_exception(*sys.exc_info())
     finally:
         print('Shutting down connection to drone...')
         if video_recorder:
