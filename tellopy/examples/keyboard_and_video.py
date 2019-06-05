@@ -225,7 +225,7 @@ def videoStreamThread(drone, screen):
     start_time = time.monotonic()
     last_frame_time = 0
     for frame in container.decode():
-        sleepUntil(start_time + last_frame_time)
+        # sleepUntil(start_time + last_frame_time)
         surface = pygame.surfarray.make_surface(np.swapaxes(frame.to_rgb().to_ndarray(), 0, 1))
         blitScaled(screen, surface)
         # TODO: update OSD here
@@ -244,8 +244,10 @@ def handleFileReceived(event, sender, data):
 def main():
     pygame.init()
     pygame.display.init()
-    pygame.display.set_mode((800,600))
-    # pygame.display.set_mode((0,0), pygame.FULLSCREEN)
+    if pygame.display.Info().wm:
+        pygame.display.set_mode((1280,720))
+    else:
+        pygame.display.set_mode((0,0), pygame.FULLSCREEN)
     pygame.font.init()
 
     global font
