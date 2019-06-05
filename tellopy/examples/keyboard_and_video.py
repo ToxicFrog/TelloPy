@@ -280,7 +280,7 @@ def main():
                     keyname = pygame.key.name(e.key)
                     if keyname == 'escape':
                         drone.quit()
-                        exit(0)
+                        os._exit(0)
                     if keyname in controls:
                         key_handler = controls[keyname]
                         if type(key_handler) == str:
