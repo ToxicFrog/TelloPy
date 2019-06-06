@@ -31,13 +31,11 @@ import datetime
 import av
 import threading
 import numpy as np
-from subprocess import Popen, PIPE
 # from tellopy import logger
 
 # log = tellopy.logger.Logger('TelloUI')
 
 prev_flight_data = None
-video_player = None
 video_recorder = None
 font = None
 date_fmt = '%Y-%m-%d_%H%M%S'
@@ -50,23 +48,16 @@ def toggle_recording(drone, speed):
 
     if video_recorder:
         # already recording, so stop
-        video_recorder.stdin.close()
-        status_print('Video saved to %s' % video_recorder.video_filename)
+        video_recorder.close()
+        status_print('Video saved')
         video_recorder = None
         return
-
-    # start a new recording
-    filename = '%s/Pictures/tello-%s.mp4' % (os.getenv('HOME'),
-                                             datetime.datetime.now().strftime(date_fmt))
-    video_recorder = Popen([
-        'mencoder', '-', '-vc', 'x264', '-fps', '30', '-ovc', 'copy',
-        '-of', 'lavf', '-lavfopts', 'format=mp4',
-        # '-ffourcc', 'avc1',
-        # '-really-quiet',
-        '-o', filename,
-    ], stdin=PIPE)
-    video_recorder.video_filename = filename
-    status_print('Recording video to %s' % filename)
+    else:
+        # tell the frame handler to start a new recording
+        video_recorder = True
+        video_recorder = '%s/Pictures/tello-%s.mp4' % (os.getenv('HOME'),
+                                                 datetime.datetime.now().strftime(date_fmt))
+        status_print('Recording video to %s' % video_recorder)
 
 def take_picture(drone, speed):
     if speed == 0:
@@ -219,17 +210,23 @@ def sleepUntil(when):
     time.sleep(max(0, when - time.monotonic()))
 
 def videoStreamThread(drone, screen):
-    global help_mode
     container = av.open(drone.get_video_stream())
+    global video_recorder
     resolution = screen.get_size()
-    start_time = time.monotonic()
-    last_frame_time = 0
-    for frame in container.decode():
-        # sleepUntil(start_time + last_frame_time)
-        surface = pygame.surfarray.make_surface(np.swapaxes(frame.to_rgb().to_ndarray(), 0, 1))
-        blitScaled(screen, surface)
-        # TODO: update OSD here
-        last_frame_time = frame.time or 0
+    for packet in container.demux(video=0):
+        for frame in packet.decode():
+            surface = pygame.surfarray.make_surface(np.swapaxes(frame.to_rgb().to_ndarray(), 0, 1))
+            blitScaled(screen, surface)
+            # TODO: update OSD here
+        if type(video_recorder) is str:
+            video_recorder = av.open(video_recorder, 'w')
+            video_recorder.add_stream(template=container.streams[0])
+        if video_recorder:
+            # FIXME: this results in a video with ~12,800fps rather than 30fps,
+            # so you can't play it back unless you manually tell the player
+            # to use 30fps.
+            packet.stream = video_recorder.streams[0]
+            video_recorder.mux_one(packet)
 
 def handleFileReceived(event, sender, data):
     global date_fmt
