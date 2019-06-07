@@ -33,16 +33,16 @@ import threading
 import numpy as np
 # from tellopy import logger
 
+from . import settings
+
 # log = tellopy.logger.Logger('TelloUI')
 
 prev_flight_data = None
 video_recorder = None
 font = None
-date_fmt = '%Y-%m-%d_%H%M%S'
 
 def toggle_recording(drone, speed):
     global video_recorder
-    global date_fmt
     if speed == 0:
         return
 
@@ -54,9 +54,7 @@ def toggle_recording(drone, speed):
         return
     else:
         # tell the frame handler to start a new recording
-        video_recorder = True
-        video_recorder = '%s/Pictures/tello-%s.mp4' % (os.getenv('HOME'),
-                                                 datetime.datetime.now().strftime(date_fmt))
+        video_recorder = datetime.datetime.now().strftime(settings.VID_FMT)
         status_print('Recording video to %s' % video_recorder)
 
 def take_picture(drone, speed):
@@ -210,8 +208,11 @@ def sleepUntil(when):
     time.sleep(max(0, when - time.monotonic()))
 
 def videoStreamThread(drone, screen):
-    container = av.open(drone.get_video_stream())
     global video_recorder
+    if settings.DRYRUN:
+        container = av.open(settings.DRYRUN)
+    else:
+        container = av.open(drone.get_video_stream())
     resolution = screen.get_size()
     for packet in container.demux(video=0):
         for frame in packet.decode():
@@ -229,11 +230,8 @@ def videoStreamThread(drone, screen):
             video_recorder.mux_one(packet)
 
 def handleFileReceived(event, sender, data):
-    global date_fmt
     # Create a file in ~/Pictures/ to receive image data from the drone.
-    path = '%s/Pictures/tello-%s.jpeg' % (
-        os.getenv('HOME'),
-        datetime.datetime.now().strftime('%Y-%m-%d_%H%M%S'))
+    path = datetime.datetime.now().strftime(settings.IMG_FMT)
     with open(path, 'wb') as fd:
         fd.write(data)
     status_print('Saved photo to %s' % path)
@@ -267,9 +265,10 @@ def main():
     speed = 30
     drone = tellopy.Tello()
     drone.connect()
-    drone.start_video()
-    drone.subscribe(drone.EVENT_FLIGHT_DATA, flightDataHandler)
-    drone.subscribe(drone.EVENT_FILE_RECEIVED, handleFileReceived)
+    if not settings.DRYRUN:
+        drone.start_video()
+        drone.subscribe(drone.EVENT_FLIGHT_DATA, flightDataHandler)
+        drone.subscribe(drone.EVENT_FILE_RECEIVED, handleFileReceived)
 
     framebuffer = pygame.display.get_surface().copy()
     threading.Thread(target=videoStreamThread, args=[drone, framebuffer]).start()
