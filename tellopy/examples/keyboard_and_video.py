@@ -119,75 +119,29 @@ controls = {
     'h': toggle_help,
 }
 
-class FlightDataDisplay(object):
-    # previous flight data value and surface to overlay
-    _value = None
-    _surface = None
-    # function (drone, data) => new value
-    # default is lambda drone,data: getattr(data, self._key)
-    _update = None
-    def __init__(self, key, format, colour=(255,255,255), update=None):
-        self._key = key
-        self._format = format
-        self._colour = colour
-
-        if update:
-            self._update = update
+def render_hud(drone):
+    """Renders the HUD to a pygame surface and returns it."""
+    lines = []
+    width,height = 0,0
+    for fmt,key in settings.HUD:
+        if type(key) is str:
+            value = fmt % getattr(drone.flight_data, key)
         else:
-            self._update = lambda drone,data: getattr(data, self._key)
-
-    def update(self, drone, data):
-        new_value = self._update(drone, data)
-        if self._value != new_value:
-            self._value = new_value
-            self._surface = font.render(self._format % (new_value,), True, self._colour)
-        return self._surface
-
-def flight_data_mode(drone, *args):
-    return (drone.zoom and "VID" or "PIC")
-
-def flight_data_recording(*args):
-    return (video_recorder and "REC 00:00" or "")  # TODO: duration of recording
-
-def update_hud(hud, drone, flight_data):
-    global help_mode
-    if help_mode:
-        return
-    (w,h) = (158,0) # width available on side of screen in 4:3 mode
-    blits = []
-    for element in hud:
-        surface = element.update(drone, flight_data)
-        if surface is None:
-            continue
-        blits += [(surface, (0, h))]
-        # w = max(w, surface.get_width())
-        h += surface.get_height()
-    h += 64  # add some padding
-    overlay = pygame.Surface((w, h), pygame.SRCALPHA)
-    # overlay.fill((0,0,0)) # remove for mplayer overlay mode
-    for blit in blits:
-        overlay.blit(*blit)
-    pygame.display.get_surface().blit(overlay, (0,0))
-    # pygame.display.update(overlay.get_rect())
+            value = fmt % key(drone)
+        surface = font.render(value, True, (255,255,255))
+        width = max(width, surface.get_width())
+        height += surface.get_height()
+        lines += [surface]
+    # Blit everything onto the final surface.
+    y = 0
+    surface = pygame.Surface((width, height), pygame.SRCALPHA)
+    for line in lines:
+        surface.blit(line, (0, y))
+        y += line.get_height()
+    return surface
 
 def status_print(text):
     pygame.display.set_caption(text)
-
-hud = [
-    FlightDataDisplay('height', 'ALT %3d'),
-    FlightDataDisplay('ground_speed', 'SPD %3d'),
-    FlightDataDisplay('battery_percentage', 'BAT %3d%%'),
-    FlightDataDisplay('wifi_strength', 'NET %3d%%'),
-    FlightDataDisplay(None, 'CAM %s', update=flight_data_mode),
-    FlightDataDisplay(None, '%s', colour=(255, 0, 0), update=flight_data_recording),
-]
-
-def flightDataHandler(event, sender, data):
-    global prev_flight_data
-    text = str(data)
-    if prev_flight_data != text:
-        update_hud(hud, sender, data)
-        prev_flight_data = text
 
 def aspectScale(surface, dimensions):
     dw,dh = dimensions  # destination dims
@@ -218,7 +172,7 @@ def videoStreamThread(drone, screen):
         for frame in packet.decode():
             surface = pygame.surfarray.make_surface(np.swapaxes(frame.to_rgb().to_ndarray(), 0, 1))
             blitScaled(screen, surface)
-            # TODO: update OSD here
+            screen.blit(render_hud(drone), (0,0))
         if type(video_recorder) is str:
             video_recorder = av.open(video_recorder, 'w')
             video_recorder.add_stream(template=container.streams[0])
@@ -267,7 +221,6 @@ def main():
     drone.connect()
     if not settings.DRYRUN:
         drone.start_video()
-        drone.subscribe(drone.EVENT_FLIGHT_DATA, flightDataHandler)
         drone.subscribe(drone.EVENT_FILE_RECEIVED, handleFileReceived)
 
     framebuffer = pygame.display.get_surface().copy()
