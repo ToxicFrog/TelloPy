@@ -20,3 +20,45 @@ HUD = [
   ('NET %3d%%', 'wifi_strength'),
   ('CAM %s', lambda drone: drone.zoom and "VID" or "PIC"),
 ]
+
+# Keymappings. Controller map is based on joystick_and_video.py.
+# Controller button names are based on the xbox layout.
+# TODO: The controller mappings don't do anything in keyboard_and_video yet.
+CONTROLS = {
+  # Moving around
+  'forward':    ['w', 'YButton'],
+  'backward':   ['s', 'AButton'],
+  'left':       ['a', 'XButton'],
+  'right':      ['d', 'BButton'],
+  'up':         ['space', 'DPadUp'],
+  'down':       ['left shift', 'right shift', 'DPadDown'],
+
+  # Rotation
+  'counter_clockwise':
+                ['q', 'left', 'DPadLeft'],
+  'clockwise':  ['e', 'right', 'DPadRight'],
+
+  # Takeoff and landing
+  'takeoff':    ['tab', 'R1'],
+  'land':       ['backspace', 'L1'],
+  'palm_land':  ['p'],
+
+  # Video and photography
+  'record':     ['r'],
+  'zoom':       ['z'],
+  'take_picture':
+                ['enter', 'return'],
+
+  # Client settings
+  'help':       ['h'],
+  'faster':     ['=', '+'],
+  'slower':     ['-'],
+  'exit':       ['escape'],
+
+  # Direct axis-to-axis mappings for controllers.
+  # Not implemented yet.
+  # 'axis_throttle':  ['AxisLeftY'],
+  # 'axis_pitch':     ['AxisRightY'],
+  # 'axis_yaw':       ['AxisLeftX'],
+  # 'axis_roll':      ['AxisRightX'],
+}

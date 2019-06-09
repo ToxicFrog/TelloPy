@@ -40,8 +40,47 @@ from . import settings
 prev_flight_data = None
 video_recorder = None
 font = None
+speed = 30
 
-def toggle_recording(drone, speed):
+# Set up the control mappings.
+# settings.CONTROLS is a map[command name => list of key or button bindings]
+# We reverse that and produce a map[key or button => command function].
+def setupKeyMap():
+    keymap = {}
+    for command,bindings in settings.CONTROLS.items():
+        for binding in bindings:
+            try:
+                keymap[binding] = globals()["command_%s" % command]
+            except KeyError:
+                print('Error setting up control mappings: a control was bound to "%s" but no handler exists for that command' % command)
+                sys.exit(1)
+    return keymap
+
+#### Key handlers ####
+
+# Set up the command handlers for simple methods on the drone that just take
+# 'speed' as their sole argument.
+for command in ['forward', 'backward', 'left', 'right', 'up', 'down',
+                'counter_clockwise', 'clockwise', 'takeoff', 'land']:
+    locals()["command_%s" % command] = lambda drone,speed: getattr(drone, command)(speed)
+
+# Command handlers for methods that we want to call with no arguments.
+for command in ['takeoff', 'land', 'palm_land', 'take_picture']:
+    locals()["command_%s" % command] = lambda drone,speed: getattr(drone, command)()
+
+def command_faster(drone, cur_speed):
+    if cur_speed == 0:
+        return
+    global speed
+    speed = min(100, cur_speed + 10)
+
+def command_slower(drone, cur_speed):
+    if cur_speed == 0:
+        return
+    global speed
+    speed = max(10, cur_speed - 10)
+
+def command_record(drone, speed):
     global video_recorder
     if speed == 0:
         return
@@ -57,17 +96,7 @@ def toggle_recording(drone, speed):
         video_recorder = datetime.datetime.now().strftime(settings.VID_FMT)
         status_print('Recording video to %s' % video_recorder)
 
-def take_picture(drone, speed):
-    if speed == 0:
-        return
-    drone.take_picture()
-
-def palm_land(drone, speed):
-    if speed == 0:
-        return
-    drone.palm_land()
-
-def toggle_zoom(drone, speed):
+def command_zoom(drone, speed):
     # In "video" mode the drone sends 1280x720 frames.
     # In "photo" mode it sends 2592x1936 (952x720) frames.
     # The video will always be centered in the window.
@@ -83,7 +112,7 @@ def toggle_zoom(drone, speed):
 
 help_mode = False
 help_screen = None
-def toggle_help(drone, speed):
+def command_help(drone, speed):
     global help_mode, help_screen
     if speed == 0:
         pygame.display.get_surface().fill((0,0,0))
@@ -94,30 +123,9 @@ def toggle_help(drone, speed):
         pygame.display.flip()
         help_mode = True
 
-controls = {
-    'w': 'forward',
-    's': 'backward',
-    'a': 'left',
-    'd': 'right',
-    'space': 'up',
-    'left shift': 'down',
-    'right shift': 'down',
-    'q': 'counter_clockwise',
-    'e': 'clockwise',
-    # arrow keys for fast turns and altitude adjustments
-    'left': lambda drone, speed: drone.counter_clockwise(speed*2),
-    'right': lambda drone, speed: drone.clockwise(speed*2),
-    'up': lambda drone, speed: drone.up(speed*2),
-    'down': lambda drone, speed: drone.down(speed*2),
-    'tab': lambda drone, speed: drone.takeoff(),
-    'backspace': lambda drone, speed: drone.land(),
-    'p': palm_land,
-    'r': toggle_recording,
-    'z': toggle_zoom,
-    'enter': take_picture,
-    'return': take_picture,
-    'h': toggle_help,
-}
+def command_exit(drone, speed):
+    drone.quit()
+    os._exit(0)
 
 def render_hud(drone):
     """Renders the HUD to a pygame surface and returns it."""
@@ -191,6 +199,8 @@ def handleFileReceived(event, sender, data):
     status_print('Saved photo to %s' % path)
 
 def main():
+    keymap = setupKeyMap()
+
     pygame.init()
     pygame.display.init()
     if pygame.display.Info().wm:
@@ -216,7 +226,6 @@ def main():
     pygame.display.get_surface().fill((0,0,0))
     pygame.display.flip()
 
-    speed = 30
     drone = tellopy.Tello()
     drone.connect()
     if not settings.DRYRUN:
@@ -233,36 +242,30 @@ def main():
                 pygame.display.flip()
             time.sleep(0.01)  # loop with pygame.event.get() is too mush tight w/o some sleep
             for e in pygame.event.get():
-                # WASD for movement
                 if e.type == pygame.locals.KEYDOWN:
                     keyname = pygame.key.name(e.key)
                     print('+' + keyname)
-                    if keyname == 'escape':
-                        drone.quit()
-                        os._exit(0)
-                    if keyname in controls:
-                        key_handler = controls[keyname]
-                        if type(key_handler) == str:
-                            getattr(drone, key_handler)(speed)
-                        else:
-                            key_handler(drone, speed)
-
+                    try:
+                        keymap[keyname](drone, speed)
+                    except KeyError:
+                        # no mapping for that key
+                        print('no mapping for %s' % keyname)
+                        pass
                 elif e.type == pygame.locals.KEYUP:
                     keyname = pygame.key.name(e.key)
                     print('-' + keyname)
-                    if keyname in controls:
-                        key_handler = controls[keyname]
-                        if type(key_handler) == str:
-                            getattr(drone, key_handler)(0)
-                        else:
-                            key_handler(drone, 0)
+                    try:
+                        keymap[keyname](drone, 0)
+                    except KeyError:
+                        # no mapping for that key
+                        pass
     except Exception as e:
         import traceback
         traceback.print_exception(*sys.exc_info())
     finally:
         print('Shutting down connection to drone...')
         if video_recorder:
-            toggle_recording(drone, 1)
+            command_record(drone, 1)
         drone.quit()
         exit(1)
 
