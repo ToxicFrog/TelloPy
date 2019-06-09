@@ -37,11 +37,6 @@ from . import settings
 
 # log = tellopy.logger.Logger('TelloUI')
 
-prev_flight_data = None
-video_recorder = None
-font = None
-speed = 30
-
 # Set up the control mappings.
 # settings.CONTROLS is a map[command name => list of key or button bindings]
 # We reverse that and produce a map[key or button => command function].
@@ -56,78 +51,65 @@ def setupKeyMap():
                 sys.exit(1)
     return keymap
 
-#### Key handlers ####
+#### Command implementations ####
+
+# Command handlers all have the name command_foo (called on key down) or
+# command_foo_keyup (called on key up).
+# If one of these is missing it's simply not called.
 
 # Set up the command handlers for simple methods on the drone that just take
-# 'speed' as their sole argument.
+# 'speed' as their sole argument, with 0 meaning to stop doing the thing.
 for command in ['forward', 'backward', 'left', 'right', 'up', 'down',
                 'counter_clockwise', 'clockwise', 'takeoff', 'land']:
-    locals()["command_%s" % command] = lambda drone,speed: getattr(drone, command)(speed)
+    locals()["command_%s" % command] = lambda drone,state: getattr(drone, command)(state.speed)
+    locals()["command_%s_keyup" % command] = lambda drone,state: getattr(drone, command)(0)
 
-# Command handlers for methods that we want to call with no arguments.
+# Command handlers for methods on the drone that take no arguments.
 for command in ['takeoff', 'land', 'palm_land', 'take_picture']:
-    locals()["command_%s" % command] = lambda drone,speed: getattr(drone, command)()
+    locals()["command_%s" % command] = lambda drone,_,__: getattr(drone, command)()
 
-def command_faster(drone, cur_speed):
-    if cur_speed == 0:
-        return
-    global speed
-    speed = min(100, cur_speed + 10)
+# Command handlers that require special handling on the client.
 
-def command_slower(drone, cur_speed):
-    if cur_speed == 0:
-        return
-    global speed
-    speed = max(10, cur_speed - 10)
+def command_faster(drone, state):
+    state.speed = min(100, state.speed + 10)
 
-def command_record(drone, speed):
-    global video_recorder
-    if speed == 0:
-        return
+def command_slower(drone, state):
+    state.speed = max(0, state.speed - 10)
 
-    if video_recorder:
+def command_record(drone, state):
+    if state.video_recorder:
         # already recording, so stop
-        video_recorder.close()
-        status_print('Video saved')
-        video_recorder = None
+        state.video_recorder.close()
+        status_print('Video saved to %s' % state.video_name)
+        state.video_recorder = None
+        state.video_name = None
         return
     else:
         # tell the frame handler to start a new recording
-        video_recorder = datetime.datetime.now().strftime(settings.VID_FMT)
-        status_print('Recording video to %s' % video_recorder)
+        state.video_name = datetime.datetime.now().strftime(settings.VID_FMT)
+        status_print('Recording video to %s' % state.video_name)
 
-def command_zoom(drone, speed):
+def command_zoom(drone, state):
     # In "video" mode the drone sends 1280x720 frames.
     # In "photo" mode it sends 2592x1936 (952x720) frames.
-    # The video will always be centered in the window.
-    # In photo mode, if we keep the window at 1280x720 that gives us ~160px on
-    # each side for status information, which is ample.
-    # Video mode is harder because then we need to abandon the 16:9 display size
-    # if we want to put the HUD next to the video.
-    if speed == 0:
-        return
     drone.set_video_mode(not drone.zoom)
-    pygame.display.get_surface().fill((0,0,0))
+    state.framebuffer.fill((0,0,0))
+
+def command_help(drone, state):
+    # Enabling help_mode takes over the rendering loop, so we don't need to
+    # worry about the framebuffer and can just write directly to the screen.
+    blitScaled(pygame.display.get_surface(), state.help_screen)
     pygame.display.flip()
+    state.help_mode = True
 
-help_mode = False
-help_screen = None
-def command_help(drone, speed):
-    global help_mode, help_screen
-    if speed == 0:
-        pygame.display.get_surface().fill((0,0,0))
-        pygame.display.flip()
-        help_mode = False
-    else:
-        blitScaled(pygame.display.get_surface(), help_screen)
-        pygame.display.flip()
-        help_mode = True
+def command_help_off(drone, state):
+    state.help_mode = False
 
-def command_exit(drone, speed):
+def command_exit(drone, state):
     drone.quit()
     os._exit(0)
 
-def render_hud(drone):
+def render_hud(drone, state):
     """Renders the HUD to a pygame surface and returns it."""
     lines = []
     width,height = 0,0
@@ -135,14 +117,15 @@ def render_hud(drone):
         if type(key) is str:
             value = fmt % getattr(drone.flight_data, key)
         else:
-            value = fmt % key(drone)
-        surface = font.render(value, True, (255,255,255))
+            value = fmt % key(drone, state)
+        surface = state.font.render(value, True, (255,255,255))
         width = max(width, surface.get_width())
         height += surface.get_height()
         lines += [surface]
     # Blit everything onto the final surface.
     y = 0
     surface = pygame.Surface((width, height), pygame.SRCALPHA)
+    surface.fill((0,0,0))
     for line in lines:
         surface.blit(line, (0, y))
         y += line.get_height()
@@ -169,27 +152,31 @@ def blitScaled(dst, src):
 def sleepUntil(when):
     time.sleep(max(0, when - time.monotonic()))
 
-def videoStreamThread(drone, screen):
-    global video_recorder
+def videoStreamThread(drone, state):
     if settings.DRYRUN:
         container = av.open(settings.DRYRUN)
     else:
         container = av.open(drone.get_video_stream())
+    screen = state.framebuffer
     resolution = screen.get_size()
     for packet in container.demux(video=0):
         for frame in packet.decode():
             surface = pygame.surfarray.make_surface(np.swapaxes(frame.to_rgb().to_ndarray(), 0, 1))
             blitScaled(screen, surface)
-            screen.blit(render_hud(drone), (0,0))
-        if type(video_recorder) is str:
-            video_recorder = av.open(video_recorder, 'w')
-            video_recorder.add_stream(template=container.streams[0])
-        if video_recorder:
+            screen.blit(render_hud(drone, state), (0,0))
+        if state.video_name and not state.video_recorder:
+            # We've been asked to start recording video.
+            state.video_recorder = av.open(video_recorder, 'w')
+            state.video_recorder.add_stream(template=container.streams[0])
+        if state.video_recorder:
             # FIXME: this results in a video with ~12,800fps rather than 30fps,
             # so you can't play it back unless you manually tell the player
             # to use 30fps.
-            packet.stream = video_recorder.streams[0]
-            video_recorder.mux_one(packet)
+            # FIXME: there's a race condition here where the key event handler
+            # might close the stream and unset state.video_recorder in between
+            # the if and the call to mux_one, causing a crash.
+            packet.stream = state.video_recorder.streams[0]
+            state.video_recorder.mux_one(packet)
 
 def handleFileReceived(event, sender, data):
     # Create a file in ~/Pictures/ to receive image data from the drone.
@@ -198,8 +185,18 @@ def handleFileReceived(event, sender, data):
         fd.write(data)
     status_print('Saved photo to %s' % path)
 
+class ClientState:
+    video_recorder = None
+    video_name = None
+    font = None
+    speed = 30
+    help_mode = False
+    help_screen = None
+    framebuffer = None
+
 def main():
     keymap = setupKeyMap()
+    state = ClientState()
 
     pygame.init()
     pygame.display.init()
@@ -209,13 +206,10 @@ def main():
         pygame.display.set_mode((0,0), pygame.FULLSCREEN)
     pygame.font.init()
 
-    global font
-    font = pygame.font.SysFont("dejavusansmono", 32)
+    state.font = pygame.font.SysFont("dejavusansmono", 32)
+    state.help_screen = pygame.image.load("tellopy/examples/help.png")
 
-    status_print('TelloPy Help')
-    global help_screen
-    help_screen = pygame.image.load("tellopy/examples/help.png")
-    blitScaled(pygame.display.get_surface(), help_screen)
+    blitScaled(pygame.display.get_surface(), state.help_screen)
     pygame.display.flip()
     while True:
         e = pygame.event.wait()
@@ -232,40 +226,35 @@ def main():
         drone.start_video()
         drone.subscribe(drone.EVENT_FILE_RECEIVED, handleFileReceived)
 
-    framebuffer = pygame.display.get_surface().copy()
-    threading.Thread(target=videoStreamThread, args=[drone, framebuffer]).start()
+    state.framebuffer = pygame.display.get_surface().copy()
+    threading.Thread(target=videoStreamThread, args=[drone, state]).start()
 
     try:
         while 1:
-            if not help_mode:
-                pygame.display.get_surface().blit(framebuffer, (0,0))
+            if not state.help_mode:
+                pygame.display.get_surface().blit(state.framebuffer, (0,0))
                 pygame.display.flip()
             time.sleep(0.01)  # loop with pygame.event.get() is too mush tight w/o some sleep
             for e in pygame.event.get():
                 if e.type == pygame.locals.KEYDOWN:
                     keyname = pygame.key.name(e.key)
-                    print('+' + keyname)
                     try:
-                        keymap[keyname](drone, speed)
+                        keymap[keyname](drone, state)
                     except KeyError:
-                        # no mapping for that key
-                        print('no mapping for %s' % keyname)
                         pass
                 elif e.type == pygame.locals.KEYUP:
-                    keyname = pygame.key.name(e.key)
-                    print('-' + keyname)
+                    keyname = pygame.key.name(e.key) + '_off'
                     try:
-                        keymap[keyname](drone, 0)
+                        keymap[keyname](drone, state)
                     except KeyError:
-                        # no mapping for that key
                         pass
     except Exception as e:
         import traceback
         traceback.print_exception(*sys.exc_info())
     finally:
         print('Shutting down connection to drone...')
-        if video_recorder:
-            command_record(drone, 1)
+        if state.video_recorder:
+            command_record(drone, state)
         drone.quit()
         exit(1)
 
