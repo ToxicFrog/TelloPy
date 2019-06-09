@@ -32,7 +32,7 @@ import av
 import threading
 import numpy as np
 # from tellopy import logger
-
+from functools import partial
 from . import settings
 
 # log = tellopy.logger.Logger('TelloUI')
@@ -45,28 +45,41 @@ def setupKeyMap():
     for command,bindings in settings.CONTROLS.items():
         for binding in bindings:
             try:
-                keymap[binding] = globals()["command_%s" % command]
+                keymap['+' + binding] = globals()["command_%s" % command]
             except KeyError:
-                print('Error setting up control mappings: a control was bound to "%s" but no handler exists for that command' % command)
+                print('Error setting up control mappings: "+%s" was bound to "%s" but no handler exists for that command' % (binding, command))
                 sys.exit(1)
+            try:
+                keymap['-' + binding] = globals()["command_%s_off" % command]
+            except KeyError:
+                # binding keyup isn't mandatory
+                pass
+
     return keymap
 
 #### Command implementations ####
 
 # Command handlers all have the name command_foo (called on key down) or
-# command_foo_keyup (called on key up).
+# command_foo_off (called on key up).
 # If one of these is missing it's simply not called.
 
 # Set up the command handlers for simple methods on the drone that just take
 # 'speed' as their sole argument, with 0 meaning to stop doing the thing.
+# The use of partial() here is necessary because if we just use `command` in the
+# lambda body without making it an argument, all of the handlers will close over
+# the same binding of `command` and will end up implementing whatever value
+# `command` had last (in this case take_picture from the second loop below).
 for command in ['forward', 'backward', 'left', 'right', 'up', 'down',
-                'counter_clockwise', 'clockwise', 'takeoff', 'land']:
-    locals()["command_%s" % command] = lambda drone,state: getattr(drone, command)(state.speed)
-    locals()["command_%s_keyup" % command] = lambda drone,state: getattr(drone, command)(0)
+                'counter_clockwise', 'clockwise']:
+    locals()["command_%s" % command] = partial(
+        lambda command,drone,state: getattr(drone, command)(state.speed), command)
+    locals()["command_%s_off" % command] = partial(
+        lambda command,drone,state: getattr(drone, command)(0), command)
 
 # Command handlers for methods on the drone that take no arguments.
 for command in ['takeoff', 'land', 'palm_land', 'take_picture']:
-    locals()["command_%s" % command] = lambda drone,_,__: getattr(drone, command)()
+    locals()["command_%s" % command] = partial(
+        lambda command,drone,_: getattr(drone, command)(), command)
 
 # Command handlers that require special handling on the client.
 
@@ -166,7 +179,7 @@ def videoStreamThread(drone, state):
             screen.blit(render_hud(drone, state), (0,0))
         if state.video_name and not state.video_recorder:
             # We've been asked to start recording video.
-            state.video_recorder = av.open(video_recorder, 'w')
+            state.video_recorder = av.open(state.video_name, 'w')
             state.video_recorder.add_stream(template=container.streams[0])
         if state.video_recorder:
             # FIXME: this results in a video with ~12,800fps rather than 30fps,
@@ -237,13 +250,13 @@ def main():
             time.sleep(0.01)  # loop with pygame.event.get() is too mush tight w/o some sleep
             for e in pygame.event.get():
                 if e.type == pygame.locals.KEYDOWN:
-                    keyname = pygame.key.name(e.key)
+                    keyname = '+' + pygame.key.name(e.key)
                     try:
                         keymap[keyname](drone, state)
                     except KeyError:
                         pass
                 elif e.type == pygame.locals.KEYUP:
-                    keyname = pygame.key.name(e.key) + '_off'
+                    keyname = '-' + pygame.key.name(e.key)
                     try:
                         keymap[keyname](drone, state)
                     except KeyError:
